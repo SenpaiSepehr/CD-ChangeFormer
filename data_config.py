@@ -14,9 +14,9 @@ class DataConfig:
         elif data_name == 'SYSU':
             self.label_transform = "norm"
             self.root_dir = '/app/datasets/SYSU-CD/'
-        elif data_name == 'CDD':
+        elif data_name == 'LEVIR':
             self.label_transform = "norm"
-            self.root_dir = '/media/lidan/ssd2/CDData/CDD-CD-256/'
+            self.root_dir = '/app/datasets/LEVIR256/'
         else:
             raise TypeError('%s has not defined' % data_name)
         return self
