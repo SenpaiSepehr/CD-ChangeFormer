@@ -19,10 +19,10 @@ CD data set with pixel-level labels；
 └─list
 """
 
-IMG_FOLDER_NAME = "t1"               # time1 for SYSU, t1 for DFISN
+IMG_FOLDER_NAME = "t1"               # time1 SYSU, t1 DFISN, A LEVIR
 IMG_POST_FOLDER_NAME = 't2'
 LIST_FOLDER_NAME = 'list'
-ANNOT_FOLDER_NAME = "mask_256/m"       # label for SYSU, mask_256/m for DFISN
+ANNOT_FOLDER_NAME = "mask_256/m"       # label SYSU, mask_256/m DFISN, label LEVIR
 
 IGNORE = 255
 
@@ -105,6 +105,7 @@ class CDDataset(ImageDataset):
 
     def __getitem__(self, index):
 
+        ## DSIFN/SYSU
         if self.split == 'train':
             path = self.root_dir + 'train/'
         else:
@@ -116,6 +117,15 @@ class CDDataset(ImageDataset):
         img = np.asarray(Image.open(A_path).convert('RGB'))
         img_B = np.asarray(Image.open(B_path).convert('RGB'))
         L_path = get_label_path(path, self.img_name_list[index % self.A_size])
+
+        ## LEVIR
+        # name = self.img_name_list[index]
+        # A_path = get_img_path(self.root_dir, self.img_name_list[index % self.A_size])
+        # B_path = get_img_post_path(self.root_dir, self.img_name_list[index % self.A_size])
+        # img = np.asarray(Image.open(A_path).convert('RGB'))
+        # img_B = np.asarray(Image.open(B_path).convert('RGB'))
+        # L_path = get_label_path(self.root_dir, self.img_name_list[index % self.A_size])
+
 
         label = np.array(Image.open(L_path), dtype=np.uint8)
         # if you are getting error because of dim mismatch ad [:,:,0] at the end
