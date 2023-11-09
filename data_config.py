@@ -5,10 +5,7 @@ class DataConfig:
     label_transform = ""
     def get_data_config(self, data_name):
         self.data_name = data_name
-        if data_name == 'LEVIR':
-            self.label_transform = "norm"
-            self.root_dir = '/app/datasets/DSIFN/'
-        elif data_name == 'DSIFN':
+        if data_name == 'DSIFN':
             self.label_transform = "norm"
             self.root_dir = '/app/datasets/DSIFN/'
         elif data_name == 'SYSU':
