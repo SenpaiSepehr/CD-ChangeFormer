@@ -16,6 +16,7 @@ from abc import ABCMeta, abstractmethod
 # from mmcv.cnn import ConvModule
 import pdb
 
+from models.LBP_Conv import *
 from models.mixer import MLPMixer
 
 from scipy.io import savemat
@@ -1593,7 +1594,7 @@ class DecoderTransformer_v3(nn.Module):
 
         #Linear Fusion of difference image from all scales
         _c = self.linear_fuse(torch.cat((_c4_up, _c3_up, _c2_up, _c1), dim=1))
-        # _c = self.linear_fuse(torch.cat((_c4_up, _c3_up), dim=1))
+        # _c = self.linear_fuse(torch.cat((_c3_up, _c4_up), dim=1))
 
         # #Dropout
         # if dropout_ratio > 0:
@@ -1712,13 +1713,15 @@ class MLPDecoder(nn.Module):
         self.active             = nn.Sigmoid() 
 
         img_res = [8,16,32,64]
-        self.mlp_mix4 = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
-                                 patch_size=patch_size, dim=512, depth=1)
-        self.mlp_mix3 = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
-                                 patch_size=patch_size, dim=512, depth=1)
+        # self.mlp_mix4 = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
+        #                          patch_size=patch_size, dim=512, depth=1)
+        # self.mlp_mix3 = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
+        #                          patch_size=patch_size, dim=512, depth=1)
         self.share_mixer = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
                                  patch_size=patch_size, dim=512, depth=1)
         
+
+                               
     def _transform_inputs(self, inputs):
         """Transform inputs for decoder.
         Args:
@@ -1756,31 +1759,34 @@ class MLPDecoder(nn.Module):
         ############## MLP decoder on C1-C4 ###########
         n4, _, h4, w4 = c4_1.shape
         n3, _, h3, w3 = c3_1.shape
+        b = n4
 
         outputs = []
         ###Difference Technique
 
         ## Subtraction
-        feats4_sub = torch.abs(c4_1 - c4_2) #(8,512,8,8)
-        feats3_sub = torch.abs(c3_1 - c3_2) #(8,320,16,16)
+        feats4_sub = torch.abs(c4_1 - c4_2) #(512,8,8)
+        feats3_sub = torch.abs(c3_1 - c3_2) #(320,16,16)
+
 
         ###Reshape (compress channel, expand size)
-        feats4 = self.linear_c4(feats4_sub).permute(0,2,1).reshape(n4,-1,w4,h4)
-        feats3 = self.linear_c3(feats3_sub).permute(0,2,1).reshape(n3,-1,w3,h3)
-
+        feats4 = self.linear_c4(feats4_sub).permute(0,2,1).reshape(b,-1,w4,h4)
         feats4 = resize(feats4, size=c2_1.size()[2:], mode='bilinear', align_corners=False)
-        feats3 = resize(feats3, size=c2_1.size()[2:], mode='bilinear', align_corners=False)
+        feats3 = self.linear_c3(feats3_sub).permute(0,2,1).reshape(b,-1,w3,h3) #(128,16,16)
+        feats3 = resize(feats3, size=c2_1.size()[2:], mode='bilinear', align_corners=False) #(128,32,32)
 
-        ###Difference Feature Fusion, MLP Mixer (Test C)
-        # feats = self.linear_fuse(torch.cat((feats4,feats3), dim=1))
-        # fused_mlp = self.share_mixer(feats)
-        # x = fused_mlp
+        # ----DECODER A,B
+        # feats4_mlp = self.mlp_mix4(feats4)
+        # feats3_mlp = self.mlp_mix3(feats3)
 
-        ###DFF + MLPMix (Test A,B)
-        feats4_mlp = self.share_mixer(feats4)
-        feats3_mlp = self.share_mixer(feats3)
-        feats = self.linear_fuse(torch.cat([feats4_mlp, feats3_mlp], dim=1))
-        x = feats
+        # feats = self.linear_fuse(torch.cat([feats3_mlp, feats4_mlp], dim=1))
+        # x = feats
+        # ----
+
+        # ----DECODER C
+        feats = self.linear_fuse(torch.cat((feats4,feats3), dim=1))
+        fused_mlp = self.share_mixer(feats)
+        x = fused_mlp
 
         #Upsampling #(8,128,32,32) -> (8,128,128,128)
         for i in range(2):
@@ -1835,7 +1841,7 @@ class ChangeFormerV6(nn.Module):
 
         [fx1, fx2] = [self.Tenc_x2(x1), self.Tenc_x2(x2)]
 
-        cp = self.TDec_x1(fx1, fx2)
+        cp = self.TDec_x2(fx1, fx2)
 
         # # Save to mat
         # save_to_mat(x1, x2, fx1, fx2, cp, "ChangeFormerV4")
