@@ -2,7 +2,8 @@ from argparse import ArgumentParser
 import torch
 import random
 from models.trainer import *
-from torch.profiler import profile, record_function, ProfilerActivity
+import optuna
+
 
 print(torch.cuda.is_available())
 
@@ -20,10 +21,10 @@ def seed(seed=2023):
 seed()
 
 def train(args):
+    seed()
     dataloaders = utils.get_loaders(args)
     model = CDTrainer(args=args, dataloaders=dataloaders)
     model.train_models()
-    #model.network_summary(args=args)
 
 def test(args):
     from models.evaluator import CDEvaluator
@@ -34,21 +35,28 @@ def test(args):
 
     model.eval_models()
 
-
 def network_summary(args):
+    seed()
+    dataloaders = utils.get_loaders(args)
+    model = CDTrainer(args=args, dataloaders=dataloaders)
+    model.network_summary(args=args)
 
-    with torch.profiler.profile(
-        activities=[ProfilerActivity.CUDA], 
-        schedule=torch.profiler.schedule(wait=1,warmup=1,active=3,repeat=2),
-        on_trace_ready = torch.profiler.tensorboard_trace_handler('./TB_Oct13/base256_1'),
-        record_shapes=True,
-        with_stack=True
-    ) as p:
-        train(args)
-        p.stop()
+def objective(trial):
+    global index
 
-                
-            
+    start_lr = [0.001, 0.0001, 0.00001, 0.000001]
+    optuna_lr = start_lr[index]
+    args.lr = optuna_lr
+    print(f'Optuna Learning-Rate: {args.lr}')
+    
+    index += 1
+
+    dataloaders = utils.get_loaders(args)
+    model = CDTrainer(args=args, dataloaders=dataloaders)
+    model.train_models()
+
+    val_acc = model.best_val_acc
+    return val_acc
 
 
 if __name__ == '__main__':
@@ -56,17 +64,17 @@ if __name__ == '__main__':
     # args
     # ------------
     parser = ArgumentParser()
-    parser.add_argument('--gpu_ids', type=str, default='6,7', help='gpu ids: e.g. 0  0,1,2, 0,2. use -1 for CPU')
-    parser.add_argument('--project_name', default='ChangeFormer/DSIFN/base_2.Oct16', type=str)
+    parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: 6,7 0,1 2,3,4,5 -1 CPU')
+    parser.add_argument('--project_name', default='BestParams/CF/LEVIR_A_LR.0001', type=str)
     parser.add_argument('--checkpoint_root', default='checkpoint', type=str)
     parser.add_argument('--vis_root', default='vis_ChangeMaps', type=str)
 
     # data
     parser.add_argument('--num_workers', default=32, type=int)
     parser.add_argument('--dataset', default='CDDataset', type=str)
-    parser.add_argument('--data_name', default='DSIFN', type=str)
+    parser.add_argument('--data_name', default='LEVIR', help='SYSU,DSIFN,LEVIR', type=str)
 
-    parser.add_argument('--batch_size', default=16, type=int)
+    parser.add_argument('--batch_size', default=8, type=int)
     parser.add_argument('--split', default="train", type=str)
     parser.add_argument('--split_val', default="val", type=str)
 
@@ -75,8 +83,7 @@ if __name__ == '__main__':
 
     # model
     parser.add_argument('--n_class', default=2, type=int)
-    parser.add_argument('--embed_dim', default=256, type=int)
-    parser.add_argument('--patch_size', default=2, type=int)
+    parser.add_argument('--embed_dim', default=128, type=int)  # Decoder A,B,C: 128, Baseline: 256
     parser.add_argument('--pretrain', default=None, type=str)
     parser.add_argument('--multi_scale_train', default=False, type=str)
     parser.add_argument('--multi_scale_infer', default=False, type=str)
@@ -88,10 +95,14 @@ if __name__ == '__main__':
                              'base_transformer_pos_s4_dd8_dedim8|ChangeFormerV5|SiamUnet_diff')
     parser.add_argument('--loss', default='ce', type=str)
 
+    # decoder
+    parser.add_argument('--decoder_type', default='decoderA', type=str, help= 'base, decoder(A,B,C)')
+    parser.add_argument('--patch_size', default=2, type=int) # Decoder A,B: 2, Decoder C: 4
+
     # optimizer
     parser.add_argument('--optimizer', default='adamw', type=str)
-    parser.add_argument('--lr', default=0.00006, type=float)
-    parser.add_argument('--max_epochs', default=70, type=int)
+    parser.add_argument('--lr', default=0.0001, type=float)
+    parser.add_argument('--max_epochs', default=100, type=int)
     parser.add_argument('--lr_policy', default='linear', type=str,
                         help='linear | step')
     parser.add_argument('--lr_decay_iters', default=100, type=int)
@@ -107,6 +118,14 @@ if __name__ == '__main__':
     args.vis_dir = os.path.join(args.vis_root, args.project_name)
     os.makedirs(args.vis_dir, exist_ok=True)
 
-    #network_summary(args)
+    torch.cuda.empty_cache()
     train(args)
     #test(args)
+    # network_summary(args)
+
+    ## Optuna Optimization
+    # index = 0
+    # study = optuna.create_study(direction='maximize')
+    # study.optimize(objective, n_trials=4)
+
+
