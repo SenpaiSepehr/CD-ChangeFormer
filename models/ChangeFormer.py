@@ -7,21 +7,11 @@ from models.ChangeFormerBaseNetworks import *
 from models.help_funcs import TwoLayerConv2d, save_to_mat
 import torch.nn.functional as F
 
-import timm
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-import types
 import math
-from abc import ABCMeta, abstractmethod
-# from mmcv.cnn import normal_init
-# from mmcv.cnn import ConvModule
-import pdb
 
 from models.LBP_Conv import *
 from models.mixer import MLPMixer
-
-from scipy.io import savemat
-
-from models.pixel_shuffel_up import PS_UP
 
 class EncoderTransformer(nn.Module):
     def __init__(self, img_size=256, patch_size=16, in_chans=3, num_classes=2, embed_dims=[64, 128, 256, 512],
@@ -1665,7 +1655,7 @@ class MLPDecoder(nn.Module):
     """
     def __init__(self, input_transform='multiple_select', in_index=[0, 1, 2, 3], align_corners=True, 
                     in_channels = [32, 64, 128, 256], embedding_dim= 64, output_nc=2, 
-                    decoder_softmax = False, feature_strides=[2, 4, 8, 16], patch_size=2):
+                    decoder_softmax = False, feature_strides=[2, 4, 8, 16], patch_size=2, decoder_type='decoderA'):
         super(MLPDecoder, self).__init__()
         #assert
         assert len(feature_strides) == len(in_channels)
@@ -1680,6 +1670,8 @@ class MLPDecoder(nn.Module):
         self.embedding_dim   = embedding_dim
         self.output_nc       = output_nc
         c1_in_channels, c2_in_channels, c3_in_channels, c4_in_channels = self.in_channels
+        self.decoder_type = decoder_type
+        self.patch_size = patch_size
 
         #MLP decoder heads
         self.linear_c4 = MLP(input_dim=c4_in_channels, embed_dim=self.embedding_dim) #512, 128
@@ -1713,10 +1705,10 @@ class MLPDecoder(nn.Module):
         self.active             = nn.Sigmoid() 
 
         img_res = [8,16,32,64]
-        # self.mlp_mix4 = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
-        #                          patch_size=patch_size, dim=512, depth=1)
-        # self.mlp_mix3 = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
-        #                          patch_size=patch_size, dim=512, depth=1)
+        self.mlp_mix4 = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
+                                 patch_size=patch_size, dim=512, depth=1)
+        self.mlp_mix3 = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
+                                 patch_size=patch_size, dim=512, depth=1)
         self.share_mixer = MLPMixer(image_size=img_res[2], channels=c2_in_channels,
                                  patch_size=patch_size, dim=512, depth=1)
         
@@ -1748,11 +1740,11 @@ class MLPDecoder(nn.Module):
         return inputs
 
     def forward(self, inputs1, inputs2):
-        #Transforming encoder features (select layers)
+        # Transforming encoder features (select layers)
         x_1 = self._transform_inputs(inputs1)  # len=4, 1/2, 1/4, 1/8, 1/16
         x_2 = self._transform_inputs(inputs2)  # len=4, 1/2, 1/4, 1/8, 1/16
 
-        #img1 and img2 features
+        # img1 and img2 features
         c1_1, c2_1, c3_1, c4_1 = x_1
         c1_2, c2_2, c3_2, c4_2 = x_2
 
@@ -1762,43 +1754,47 @@ class MLPDecoder(nn.Module):
         b = n4
 
         outputs = []
-        ###Difference Technique
 
-        ## Subtraction
+        # Difference
         feats4_sub = torch.abs(c4_1 - c4_2) #(512,8,8)
         feats3_sub = torch.abs(c3_1 - c3_2) #(320,16,16)
 
-
-        ###Reshape (compress channel, expand size)
+        # Reshape (compress channel, expand size)
         feats4 = self.linear_c4(feats4_sub).permute(0,2,1).reshape(b,-1,w4,h4)
         feats4 = resize(feats4, size=c2_1.size()[2:], mode='bilinear', align_corners=False)
         feats3 = self.linear_c3(feats3_sub).permute(0,2,1).reshape(b,-1,w3,h3) #(128,16,16)
         feats3 = resize(feats3, size=c2_1.size()[2:], mode='bilinear', align_corners=False) #(128,32,32)
 
-        # ----DECODER A,B
-        # feats4_mlp = self.mlp_mix4(feats4)
-        # feats3_mlp = self.mlp_mix3(feats3)
+        if self.decoder_type == 'decoderA':
+            feats4_mlp = self.share_mixer(feats4)
+            feats3_mlp = self.share_mixer(feats3)
+            feats = self.linear_fuse(torch.cat([feats4_mlp, feats3_mlp], dim=1))
 
-        # feats = self.linear_fuse(torch.cat([feats3_mlp, feats4_mlp], dim=1))
-        # x = feats
-        # ----
+        elif self.decoder_type == 'decoderB':
+            feats4_mlp = self.mlp_mix4(feats4)
+            feats3_mlp = self.mlp_mix3(feats3)
+            feats = self.linear_fuse(torch.cat([feats4_mlp, feats3_mlp], dim=1))
 
-        # ----DECODER C
-        feats = self.linear_fuse(torch.cat((feats4,feats3), dim=1))
-        fused_mlp = self.share_mixer(feats)
-        x = fused_mlp
+        elif self.decoder_type == 'decoderC':
+            fused_feats = self.linear_fuse(torch.cat((feats4, feats3), dim=1))
+            feats = self.share_mixer(fused_feats)
+        
+        else:
+            raise NotImplementedError('Decoder type [%s] is not supported' % self.decoder_type)
 
-        #Upsampling #(8,128,32,32) -> (8,128,128,128)
+        x = feats
+
+        # Upsampling #(8,128,32,32) -> (8,128,128,128)
         for i in range(2):
             x = self.convd2x(x)
             x = self.dense_2x(x)
 
-        #Upsampling x2 (x1 scale)
+        # Upsampling x2 (x1 scale)
         x = self.convd1x(x)
-        #Residual block
+        # Residual block
         x = self.dense_1x(x) #(8,128,256,256)
 
-        #Logits
+        # Logits
         logits = self.change_probability(x) #(8,2,256,256)
 
         outputs.append(logits)
@@ -1810,10 +1806,12 @@ class MLPDecoder(nn.Module):
                 outputs.append(self.active(pred))
 
         return outputs
+    
+
 # ChangeFormerV6:
 class ChangeFormerV6(nn.Module):
 
-    def __init__(self, input_nc=3, output_nc=2, decoder_softmax=False, embed_dim=256, patch_size=2):
+    def __init__(self, input_nc=3, output_nc=2, decoder_softmax=False, embed_dim=256, patch_size=2, decoder_type='decoderA'):
         super(ChangeFormerV6, self).__init__()
         #Transformer Encoder
         self.embed_dims = [64, 128, 320, 512]
@@ -1823,6 +1821,8 @@ class ChangeFormerV6(nn.Module):
         self.attn_drop = 0.1
         self.drop_path_rate = 0.1 
         self.patch_size = patch_size
+        self.decoder_type = decoder_type
+
         self.Tenc_x2    = EncoderTransformer_v3(img_size=256, patch_size = 7, in_chans=input_nc, num_classes=output_nc, embed_dims=self.embed_dims,
                  num_heads = [1, 2, 4, 8], mlp_ratios=[4, 4, 4, 4], qkv_bias=True, qk_scale=None, drop_rate=self.drop_rate,
                  attn_drop_rate = self.attn_drop, drop_path_rate=self.drop_path_rate, norm_layer=partial(nn.LayerNorm, eps=1e-6),
@@ -1835,16 +1835,15 @@ class ChangeFormerV6(nn.Module):
         
         self.TDec_x2   = MLPDecoder(input_transform='multiple_select', in_index=[0, 1, 2, 3], align_corners=False, 
                     in_channels = self.embed_dims, embedding_dim= self.embedding_dim, output_nc=output_nc, 
-                    decoder_softmax = decoder_softmax, feature_strides=[2, 4, 8, 16],patch_size=self.patch_size)
+                    decoder_softmax = decoder_softmax, feature_strides=[2, 4, 8, 16],patch_size=self.patch_size, decoder_type=self.decoder_type)
 
     def forward(self, x1, x2):
 
         [fx1, fx2] = [self.Tenc_x2(x1), self.Tenc_x2(x2)]
 
-        cp = self.TDec_x2(fx1, fx2)
+        if self.decoder_type == 'base':
+            cp = self.TDec_x1(fx1, fx2)
+        else: 
+            cp = self.TDec_x2(fx1, fx2)
 
-        # # Save to mat
-        # save_to_mat(x1, x2, fx1, fx2, cp, "ChangeFormerV4")
-
-        # exit()
         return cp
