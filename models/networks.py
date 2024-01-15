@@ -38,8 +38,8 @@ def get_scheduler(optimizer, args):
             return lr_l
         scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
     elif args.lr_policy == 'step':
-        step_size = args.max_epochs//3
-        # args.lr_decay_iters
+        #step_size = args.max_epochs//3
+        step_size = args.lr_decay_iters
         scheduler = lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=0.1)
     else:
         return NotImplementedError('learning rate policy [%s] is not implemented', args.lr_policy)
@@ -156,7 +156,7 @@ def define_G(args, init_type='normal', init_gain=0.02, gpu_ids=[]):
         net = ChangeFormerV5(embed_dim=args.embed_dim) #ChangeFormer with Transformer Encoder and Convolutional Decoder (Fuse)
 
     elif args.net_G == 'ChangeFormerV6':
-        net = ChangeFormerV6(embed_dim=args.embed_dim) #ChangeFormer with Transformer Encoder and Convolutional Decoder (Fuse)
+        net = ChangeFormerV6(embed_dim=args.embed_dim, patch_size=args.patch_size, decoder_type=args.decoder_type) #ChangeFormer with Transformer Encoder and Convolutional Decoder (Fuse)
     
     elif args.net_G == "SiamUnet_diff":
         #Implementation of ``Fully convolutional siamese networks for change detection''
